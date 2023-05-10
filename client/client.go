@@ -212,6 +212,9 @@ func (o *ovsdbClient) Connect(ctx context.Context) error {
 			return err
 		}
 	}
+	if o.options.inactiveCheck {
+		go o.handleInactivityCheck()
+	}
 	return nil
 }
 
@@ -854,8 +857,9 @@ func newMonitorRequest(data *mapper.Info, fields []string, conditions []ovsdb.Co
 	return &ovsdb.MonitorRequest{Columns: columns, Where: conditions, Select: ovsdb.NewDefaultMonitorSelect()}, nil
 }
 
-//gocyclo:ignore
 // monitor must only be called with a lock on monitorsMutex
+//
+//gocyclo:ignore
 func (o *ovsdbClient) monitor(ctx context.Context, cookie MonitorCookie, reconnecting bool, monitor *Monitor) error {
 	// if we're reconnecting, we already hold the rpcMutex
 	if !reconnecting {
@@ -1138,8 +1142,64 @@ func (o *ovsdbClient) handleClientErrors(stopCh <-chan struct{}) {
 	}
 }
 
+func (o *ovsdbClient) handleInactivityCheck() {
+	failCount := 0
+	isInActive := false
+	for {
+		o.shutdownMutex.Lock()
+		o.rpcMutex.Lock()
+		if o.rpcClient == nil || o.shutdown {
+			o.rpcMutex.Unlock()
+			o.shutdownMutex.Unlock()
+			return
+		}
+		o.rpcMutex.Unlock()
+		ctx, cancel := context.WithTimeout(context.Background(), o.options.timeout)
+		if !isInActive {
+			err := o.Echo(ctx)
+			if err != nil {
+				failCount++
+				// When echo fails consecutively 2 times, then consider ovndb connection as inactive.
+				if failCount == 2 {
+					isInActive = true
+				}
+			}
+		} else if isInActive {
+			// Since connection to ovsdb server is inactive for 2 * interval, try to reconnect with it.
+			o.rpcMutex.Lock()
+			if o.rpcClient != nil {
+				// close the stopCh, which will stop the cache event processor
+				close(o.stopCh)
+				// wait for client related handlers to shutdown
+				o.handlerShutdown.Wait()
+			}
+			o.rpcClient = nil
+			o.rpcMutex.Unlock()
+			// need to ensure deferredUpdates is cleared on every reconnect attempt
+			for _, db := range o.databases {
+				db.cacheMutex.Lock()
+				db.deferredUpdates = make([]*bufferedUpdate, 0)
+				db.deferUpdates = true
+				db.cacheMutex.Unlock()
+			}
+			err := o.connect(ctx, true)
+			if err == nil {
+				isInActive = false
+				failCount = 0
+			} else {
+				o.resetRPCClient()
+			}
+		}
+		o.shutdownMutex.Unlock()
+		cancel()
+		time.Sleep(o.options.interval)
+	}
+}
+
 func (o *ovsdbClient) handleDisconnectNotification() {
 	<-o.rpcClient.DisconnectNotify()
+	o.shutdownMutex.Lock()
+	defer o.shutdownMutex.Unlock()
 	// close the stopCh, which will stop the cache event processor
 	close(o.stopCh)
 	o.metrics.numDisconnects.Inc()
@@ -1205,8 +1265,6 @@ func (o *ovsdbClient) handleDisconnectNotification() {
 	}
 	o.metrics.numMonitors.Set(0)
 
-	o.shutdownMutex.Lock()
-	defer o.shutdownMutex.Unlock()
 	o.shutdown = false
 
 	select {
@@ -1307,7 +1365,7 @@ func hasMonitors(db *database) bool {
 // We add this wrapper to allow users to access the API directly on the
 // client object
 
-//Get implements the API interface's Get function
+// Get implements the API interface's Get function
 func (o *ovsdbClient) Get(ctx context.Context, model model.Model) error {
 	primaryDB := o.primaryDB()
 	waitForCacheConsistent(ctx, primaryDB, o.logger, o.primaryDBName)
@@ -1315,12 +1373,12 @@ func (o *ovsdbClient) Get(ctx context.Context, model model.Model) error {
 	return primaryDB.api.Get(ctx, model)
 }
 
-//Create implements the API interface's Create function
+// Create implements the API interface's Create function
 func (o *ovsdbClient) Create(models ...model.Model) ([]ovsdb.Operation, error) {
 	return o.primaryDB().api.Create(models...)
 }
 
-//List implements the API interface's List function
+// List implements the API interface's List function
 func (o *ovsdbClient) List(ctx context.Context, result interface{}) error {
 	primaryDB := o.primaryDB()
 	waitForCacheConsistent(ctx, primaryDB, o.logger, o.primaryDBName)
@@ -1338,12 +1396,12 @@ func (o *ovsdbClient) WhereAny(m model.Model, conditions ...model.Condition) Con
 	return o.primaryDB().api.WhereAny(m, conditions...)
 }
 
-//WhereAll implements the API interface's WhereAll function
+// WhereAll implements the API interface's WhereAll function
 func (o *ovsdbClient) WhereAll(m model.Model, conditions ...model.Condition) ConditionalAPI {
 	return o.primaryDB().api.WhereAll(m, conditions...)
 }
 
-//WhereCache implements the API interface's WhereCache function
+// WhereCache implements the API interface's WhereCache function
 func (o *ovsdbClient) WhereCache(predicate interface{}) ConditionalAPI {
 	return o.primaryDB().api.WhereCache(predicate)
 }
