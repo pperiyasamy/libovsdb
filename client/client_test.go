@@ -972,8 +972,7 @@ func TestClientInactiveCheck(t *testing.T) {
 	// Create client to test inactivity check.
 	endpoint := fmt.Sprintf("unix:%s", sock)
 	ovs, err := newOVSDBClient(serverDBModel,
-		WithReconnect(5*time.Second, &backoff.ZeroBackOff{}),
-		WithInactivityCheck(1*time.Second, 2*time.Second),
+		WithInactivityCheck(1*time.Second, 2*time.Second, 5*time.Second, &backoff.ZeroBackOff{}),
 		WithEndpoint(endpoint))
 	require.NoError(t, err)
 	err = ovs.Connect(context.Background())
@@ -986,30 +985,22 @@ func TestClientInactiveCheck(t *testing.T) {
 	// is started responding to echo requests.
 	server.DoEcho(false)
 	require.Eventually(t, func() bool {
-		ovs.inactivityMutex.Lock()
-		defer ovs.inactivityMutex.Unlock()
-		return ovs.isInactivity == true
+		return ovs.isClientUnderInactivity() == true
 	}, 10*time.Second, 1*time.Second)
 
 	server.DoEcho(true)
 	require.Eventually(t, func() bool {
-		ovs.inactivityMutex.Lock()
-		defer ovs.inactivityMutex.Unlock()
-		return ovs.isInactivity == false
+		return ovs.isClientUnderInactivity() == false
 	}, 10*time.Second, 1*time.Second)
 
 	server.DoEcho(false)
 	require.Eventually(t, func() bool {
-		ovs.inactivityMutex.Lock()
-		defer ovs.inactivityMutex.Unlock()
-		return ovs.isInactivity == true
+		return ovs.isClientUnderInactivity() == true
 	}, 10*time.Second, 1*time.Second)
 
 	server.DoEcho(true)
 	require.Eventually(t, func() bool {
-		ovs.inactivityMutex.Lock()
-		defer ovs.inactivityMutex.Unlock()
-		return ovs.isInactivity == false
+		return ovs.isClientUnderInactivity() == false
 	}, 10*time.Second, 1*time.Second)
 }
 
