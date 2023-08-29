@@ -1225,20 +1225,20 @@ func (o *ovsdbClient) handleInactivityProbes() {
 				o.Disconnect()
 				return
 			}
-			// Otherwise send an echo
-			thisEcho := fmt.Sprintf("%d", time.Now().UnixMicro())
-			args := []interface{}{"libovsdb echo", thisEcho}
-			var reply []interface{}
-			// Can't use o.Echo() because it blocks; we need the Call object direct from o.rpcClient.Go()
-			call := o.sendEcho(args, &reply)
-			if call == nil {
-				o.logger.V(3).Info("error in sending echo")
-				o.Disconnect()
-				return
-			}
-			o.logger.V(3).Info("echo is sent, waiting for reply in async")
-			lastEcho = thisEcho
 			go func() {
+				// Otherwise send an echo
+				thisEcho := fmt.Sprintf("%d", time.Now().UnixMicro())
+				args := []interface{}{"libovsdb echo", thisEcho}
+				var reply []interface{}
+				// Can't use o.Echo() because it blocks; we need the Call object direct from o.rpcClient.Go()
+				call := o.sendEcho(args, &reply)
+				if call == nil {
+					o.logger.V(3).Info("error in sending echo")
+					o.Disconnect()
+					return
+				}
+				o.logger.V(3).Info("echo is sent, waiting for reply in async")
+				lastEcho = thisEcho
 				// Wait for the echo reply
 				select {
 				case <-stopCh:
