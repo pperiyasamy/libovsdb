@@ -1205,12 +1205,15 @@ func (o *ovsdbClient) handleInactivityProbes() {
 	for {
 		select {
 		case <-stopCh:
+			o.logger.V(3).Info("got stop signal")
 			return
 		case <-trafficSeen:
+			o.logger.V(3).Info("traffic is seen, no need for sending echo")
 			// We got some traffic from the server, restart our timer
 		case ts := <-echoReplied:
 			// Got a response from the server, check it against lastEcho; if same clear lastEcho; if not same Disconnect()
 			if ts != lastEcho {
+				o.logger.V(3).Info("echo reply is not for last echo, disconnect")
 				o.Disconnect()
 				return
 			}
@@ -1218,6 +1221,7 @@ func (o *ovsdbClient) handleInactivityProbes() {
 		case <-time.After(o.options.inactivityTimeout):
 			// If there's a lastEcho already, then we didn't get a server reply, disconnect
 			if lastEcho != "" {
+				o.logger.V(3).Info("not received echo reply after inactivity timeout, disconnect")
 				o.Disconnect()
 				return
 			}
@@ -1228,9 +1232,11 @@ func (o *ovsdbClient) handleInactivityProbes() {
 			// Can't use o.Echo() because it blocks; we need the Call object direct from o.rpcClient.Go()
 			call := o.sendEcho(args, &reply)
 			if call == nil {
+				o.logger.V(3).Info("error in sending echo")
 				o.Disconnect()
 				return
 			}
+			o.logger.V(3).Info("echo is sent, waiting for reply in async")
 			lastEcho = thisEcho
 			go func() {
 				// Wait for the echo reply
@@ -1247,6 +1253,7 @@ func (o *ovsdbClient) handleInactivityProbes() {
 							"expected", args, "reply", reply)
 						o.Disconnect()
 					} else {
+						o.logger.V(3).Info("got echo reply from server")
 						// Otherwise stuff thisEcho into the echoReplied channel
 						echoReplied <- thisEcho
 					}
