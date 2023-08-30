@@ -333,6 +333,7 @@ func (o *ovsdbClient) tryEndpoint(ctx context.Context, u *url.URL) (string, erro
 	var dialer net.Dialer
 	var err error
 	var c net.Conn
+	var c1 *net.TCPConn
 
 	switch u.Scheme {
 	case UNIX:
@@ -351,7 +352,11 @@ func (o *ovsdbClient) tryEndpoint(ctx context.Context, u *url.URL) (string, erro
 		return "", fmt.Errorf("failed to open connection: %w", err)
 	}
 
-	o.createRPC2Client(c)
+	c1 = c.(*net.TCPConn)
+	c1.SetWriteBuffer(256)
+	c1.SetWriteBuffer(256)
+
+	o.createRPC2Client(c1)
 
 	serverDBNames, err := o.listDbs(ctx)
 	if err != nil {
@@ -1231,6 +1236,7 @@ func (o *ovsdbClient) handleInactivityProbes() {
 				args := []interface{}{"libovsdb echo", thisEcho}
 				var reply []interface{}
 				// Can't use o.Echo() because it blocks; we need the Call object direct from o.rpcClient.Go()
+				o.logger.V(3).Info("send echo, waiting for reply in async")
 				call := o.sendEcho(args, &reply)
 				if call == nil {
 					o.logger.V(3).Info("error in sending echo")
